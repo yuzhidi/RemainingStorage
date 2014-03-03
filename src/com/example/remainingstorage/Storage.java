@@ -1,10 +1,16 @@
 package com.example.remainingstorage;
 
+import java.io.File;
 import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import android.os.Environment;
+import android.os.RemoteException;
+import android.os.StatFs;
+import android.os.storage.StorageManager;
 import android.util.Log;
+
+import android.os.storage.StorageVolume;
 
 public class Storage {
     private static final String TAG = "CameraStorage";
@@ -32,6 +38,10 @@ public class Storage {
     public static final int PICTURE_TYPE_MPO = 1;
     public static final int PICTURE_TYPE_JPS = 2;
     public static final int PICTURE_TYPE_MPO_3D = 3;
+
+    public static final int FILE_TYPE_PHOTO = ISavingPath.FILE_TYPE_PHOTO;
+    public static final int FILE_TYPE_VIDEO = ISavingPath.FILE_TYPE_VIDEO;
+    public static final int FILE_TYPE_PANO = ISavingPath.FILE_TYPE_PANO;
 
     public static int getSize(String key) {
         return PICTURE_SIZE_TABLE.get(key);
@@ -110,6 +120,149 @@ public class Storage {
 
         PICTURE_SIZE_TABLE.putDefault(1500000);
     }
+
+    private static StorageManager sStorageManager;
+
+    private static StorageManager getStorageManager() {
+        if (sStorageManager == null) {
+            try {
+                sStorageManager = new StorageManager(null);
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+        }
+        return sStorageManager;
+    }
+
+    public static boolean isSDCard() {
+        StorageManager storageManager = getStorageManager();
+        String storagePath = sMountPoint;// storageManager.getDefaultPath();
+        StorageVolume[] volumes = storageManager.getVolumeList();
+        int nVolume = -1;
+        for (int i = 0; i < volumes.length; i++) {
+            if (volumes[i].getPath().equals(storagePath)) {
+                nVolume = i;
+                break;
+            }
+        }
+        boolean isSd = false;
+        if (nVolume != -1) {
+            isSd = volumes[nVolume].isRemovable();
+        }
+        Log.v(TAG, "isSDCard() storagePath=" + storagePath + " return " + isSd);
+
+        return isSd;
+    }
+
+    public static boolean isMultiStorage() {
+        StorageManager storageManager = getStorageManager();
+        StorageVolume[] volumes = storageManager.getVolumeList();
+        return volumes.length > 1;
+    }
+
+    public static boolean isHaveExternalSDCard() {
+        StorageManager storageManager = getStorageManager();
+        StorageVolume[] volumes = storageManager.getVolumeList();
+        for (int i = 0; i < volumes.length; i++) {
+            if (volumes[i].isRemovable()
+                    && Environment.MEDIA_MOUNTED.equals(storageManager
+                            .getVolumeState(volumes[i].getPath()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static long getAvailableSpace() {
+        String state;
+        StorageManager storageManager = getStorageManager();
+        state = storageManager.getVolumeState(sMountPoint);
+        Log.d(TAG, "External storage state=" + state + ", mount point = "
+                + sMountPoint);
+        if (Environment.MEDIA_CHECKING.equals(state)) {
+            return PREPARING;
+        }
+        if (!Environment.MEDIA_MOUNTED.equals(state)) {
+            return UNAVAILABLE;
+        }
+
+        int[] types = new int[] { ISavingPath.FILE_TYPE_PHOTO,
+                ISavingPath.FILE_TYPE_PANO, ISavingPath.FILE_TYPE_VIDEO, };
+        for (int i = 0, len = types.length; i < len; i++) {
+            File dir = new File(getFileDirectory(types[i]));
+            dir.mkdirs();
+            boolean isDirectory = dir.isDirectory();
+            boolean canWrite = dir.canWrite();
+            if (!isDirectory || !canWrite) {
+                if (LOG) {
+                    Log.v(TAG, "getAvailableSpace() isDirectory=" + isDirectory
+                            + ", canWrite=" + canWrite);
+                }
+                return FULL_SDCARD;
+            }
+        }
+        try {
+            // Here just use one directory to stat fs.
+            StatFs stat = new StatFs(getFileDirectory(FILE_TYPE_PHOTO));
+            return stat.getAvailableBlocks() * (long) stat.getBlockSize();
+        } catch (Exception e) {
+            Log.i(TAG, "Fail to access external storage", e);
+        }
+        return UNKNOWN_SIZE;
+    }
+
+    private static String sMountPoint;
+
+    public static String getMountPoint() {
+        return sMountPoint;
+    }
+
+    private static boolean sStorageReady;
+
+    public static boolean isStorageReady() {
+            Log.v(TAG, "isStorageReady() mount point = " + sMountPoint
+                    + ", return " + sStorageReady);
+        return sStorageReady;
+    }
+
+    public static void setStorageReady(boolean ready) {
+            Log.v(TAG, "setStorageReady(" + ready + ") sStorageReady="
+                    + sStorageReady);
+        sStorageReady = ready;
+    }
+
+    public static boolean updateDefaultDirectory() {
+        StorageManager storageManager = getStorageManager();
+        String defaultPath = storageManager.getDefaultPath();
+        boolean diff = false;
+        String old = sMountPoint;
+        sMountPoint = defaultPath;
+        if (old != null && old.equalsIgnoreCase(sMountPoint)) {
+            diff = true;
+        }
+        int[] types = new int[] { // create directory for camera
+        ISavingPath.FILE_TYPE_PHOTO, ISavingPath.FILE_TYPE_PANO,
+                ISavingPath.FILE_TYPE_VIDEO, };
+        for (int i = 0, len = types.length; i < len; i++) {
+            File dir = new File(getFileDirectory(types[i]));
+            dir.mkdirs();
+        }
+        String state = storageManager.getVolumeState(sMountPoint);
+        setStorageReady(Environment.MEDIA_MOUNTED.equals(state));
+            Log.v(TAG, "updateDefaultDirectory() old=" + old + ", sMountPoint="
+                    + sMountPoint + " return " + diff);
+        return diff;
+    }
+
+//    public static String getFileDirectory(int fileType) {
+//        ISavingPath pathPicker = ExtensionHelper.getPathPicker();
+//        String path = sMountPoint + pathPicker.getFilePath(fileType);
+//        if (LOG) {
+//            Log.v(TAG, "getFilePath(" + fileType + ") return " + path);
+//        }
+//        return path;
+//    }
+
     private static final AtomicLong LEFT_SPACE = new AtomicLong(0);
 
     public static long getLeftSpace() {
@@ -121,6 +274,14 @@ public class Storage {
     public static void setLeftSpace(long left) {
         LEFT_SPACE.set(left);
         Log.v(TAG, "setLeftSpace(" + left + ")");
+    }
+
+    public interface ISavingPath {
+        int FILE_TYPE_PHOTO = 0; // photo
+        int FILE_TYPE_VIDEO = 1; // video
+        int FILE_TYPE_PANO = 2; // panorama
+
+        String getFilePath(int filetype);
     }
 }
 
